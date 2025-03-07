@@ -5,8 +5,6 @@ const path = require('path');
 const app = express();
 
 app.use(cors());
-
-// Serve static files from the public directory
 app.use(express.static('public'));
 
 // Serve index.html for the root route
@@ -14,30 +12,31 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-app.get('/get-transcript', async (req, res) => {
+// Handle server-side caption requests
+app.get('/get-captions', async (req, res) => {
     try {
         const { videoId } = req.query;
         
         // Try to get manual captions first
         try {
-            const captionResponse = await axios.get(
-                `https://www.youtube.com/api/timedtext?v=${videoId}&lang=en`
+            const response = await axios.get(
+                `https://video.google.com/timedtext?type=track&v=${videoId}&id=0&lang=en`
             );
-            res.send(captionResponse.data);
-        } catch (err) {
+            res.send(response.data);
+        } catch (error) {
             // If manual captions fail, try auto-generated
             try {
-                const autoCaptionResponse = await axios.get(
-                    `https://www.youtube.com/api/timedtext?v=${videoId}&lang=en&kind=asr`
+                const autoResponse = await axios.get(
+                    `https://video.google.com/timedtext?type=track&v=${videoId}&lang=en&kind=asr`
                 );
-                res.send(autoCaptionResponse.data);
-            } catch (autoErr) {
+                res.send(autoResponse.data);
+            } catch (err) {
                 res.status(404).send('No captions found');
             }
         }
     } catch (error) {
-        console.error('Error fetching transcript:', error);
-        res.status(500).send('Error fetching transcript');
+        console.error('Error:', error);
+        res.status(500).send('Error fetching captions');
     }
 });
 
