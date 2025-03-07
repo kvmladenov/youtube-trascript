@@ -4,119 +4,83 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>YouTube Transcript Viewer</title>
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
     <style>
         body {
             font-family: Arial, sans-serif;
             margin: 0;
             padding: 20px;
-            background-color: #f5f5f5;
         }
-
         .container {
             max-width: 1200px;
             margin: 0 auto;
         }
-
         .input-section {
-            background: white;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
             margin-bottom: 20px;
         }
-
-        .url-input {
-            width: 70%;
-            padding: 10px;
-            font-size: 16px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            margin-right: 10px;
+        .content-area {
+            display: flex;
+            gap: 20px;
         }
-
-        .submit-button {
-            padding: 10px 20px;
-            font-size: 16px;
-            background-color: #007bff;
-            color: white;
-            border: none;
-            border-radius: 4px;
+        .video-section {
+            flex: 1;
+            position: sticky;
+            top: 20px;
+        }
+        .transcript-section {
+            flex: 1;
+        }
+        .youtube-marker {
             cursor: pointer;
-        }
-
-        .video-container {
-            position: relative;
-            padding-bottom: 56.25%; /* 16:9 aspect ratio */
-            height: 0;
-            overflow: hidden;
-            margin-bottom: 20px;
-        }
-
-        .video-container iframe {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-        }
-
-        .transcript-container {
-            background: white;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-            margin-top: 20px;
-            line-height: 1.6;
-        }
-
-        .caption-line {
-            cursor: pointer;
-            padding: 5px;
+            padding: 2px;
             margin: 2px 0;
-            border-radius: 3px;
+            display: inline-block;
         }
-
-        .caption-line:hover {
-            background-color: #f0f0f0;
+        .youtube-marker:hover {
+            background-color: #e9ecef;
         }
-
-        .caption-line.active {
+        .youtube-marker-current {
             background-color: #007bff;
             color: white;
         }
-
-        .loading {
-            text-align: center;
-            padding: 20px;
-            color: #666;
-        }
-
-        .error {
-            color: #dc3545;
-            padding: 10px;
-            background-color: #f8d7da;
-            border-radius: 4px;
-            margin: 10px 0;
+        #demo {
+            word-break: break-word;
+            line-height: 1.6;
         }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="input-section">
-            <input type="text" id="videoUrl" class="url-input" 
-                   placeholder="Enter YouTube URL (e.g., https://www.youtube.com/watch?v=...)">
-            <button onclick="loadVideo()" class="submit-button">Get Transcript</button>
+            <input type="text" id="videoUrl" style="width: 300px; padding: 5px;" 
+                   placeholder="Enter YouTube URL">
+            <button onclick="processVideo()">Get Transcript</button>
         </div>
-
-        <div id="videoContainer" class="video-container"></div>
-        <div id="transcriptContainer" class="transcript-container">
-            Enter a YouTube URL to get started
+        
+        <div class="content-area">
+            <div class="video-section" id="videoContainer"></div>
+            <div class="transcript-section">
+                <div id="demo">Enter a YouTube URL to get started</div>
+                <div style="margin-top: 10px;">
+                    <label>
+                        <input type="checkbox" id="autoscroll_check" checked>
+                        Auto-scroll
+                    </label>
+                </div>
+            </div>
         </div>
     </div>
 
     <script>
         let player;
-        let currentVideoId = null;
+        let markers = [];
+        let HTML_captions = "";
+
+        // Load YouTube IFrame API
+        const tag = document.createElement('script');
+        tag.src = "https://www.youtube.com/iframe_api";
+        const firstScriptTag = document.getElementsByTagName('script')[0];
+        firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
 
         function extractVideoId(url) {
             const regExp = /^.*((youtu.be\/)|(v\/)|(\/u\/\w\/)|(embed\/)|(watch\?))\??v?=?([^#&?]*).*/;
@@ -124,151 +88,164 @@
             return (match && match[7].length == 11) ? match[7] : false;
         }
 
-        async function loadVideo() {
+        function processVideo() {
             const url = document.getElementById('videoUrl').value;
             const videoId = extractVideoId(url);
 
             if (!videoId) {
-                showError('Invalid YouTube URL');
+                alert('Invalid YouTube URL');
                 return;
             }
 
-            currentVideoId = videoId;
-            loadYouTubePlayer(videoId);
-            await loadTranscript(videoId);
-        }
+            // Reset variables
+            HTML_captions = "";
+            markers = [];
 
-        function loadYouTubePlayer(videoId) {
-            const container = document.getElementById('videoContainer');
-            container.innerHTML = `
+            // Embed video
+            document.getElementById('videoContainer').innerHTML = `
                 <iframe 
-                    src="https://www.youtube.com/embed/${videoId}?enablejsapi=1&origin=${window.location.origin}"
+                    id="player"
+                    width="560" 
+                    height="315" 
+                    src="https://www.youtube.com/embed/${videoId}?enablejsapi=1"
                     frameborder="0" 
-                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
                     allowfullscreen>
                 </iframe>`;
-        }
 
-        async function loadTranscript(videoId) {
-            const transcriptContainer = document.getElementById('transcriptContainer');
-            transcriptContainer.innerHTML = '<div class="loading">Loading transcript...</div>';
-
-            try {
-                const response = await fetch(`/get-transcript?videoId=${videoId}`);
-                const text = await response.text();
-
-                if (!response.ok) {
-                    throw new Error(text || 'Failed to load transcript');
-                }
-
-                // Try to parse as XML
-                const parser = new DOMParser();
-                const xml = parser.parseFromString(text, 'text/xml');
-                
-                if (xml.getElementsByTagName('parsererror').length > 0) {
-                    throw new Error('Invalid transcript data');
-                }
-
-                displayTranscript(xml);
-            } catch (error) {
-                console.error('Error loading transcript:', error);
-                transcriptContainer.innerHTML = `
-                    <div class="error">
-                        Could not load transcript. The video might not have captions available.
-                    </div>`;
-            }
-        }
-
-        function displayTranscript(xml) {
-            const transcript = xml.getElementsByTagName('transcript')[0];
-            if (!transcript || transcript.children.length === 0) {
-                showError('No captions found for this video');
-                return;
-            }
-
-            let html = '';
-            let lastTimestamp = 0;
-            const breakThreshold = 5; // seconds
-
-            for (const text of transcript.children) {
-                const start = parseFloat(text.getAttribute('start'));
-                const duration = parseFloat(text.getAttribute('dur'));
-                const content = text.textContent
-                    .replace(/&amp;#39;/g, "'")
-                    .replace(/&amp;quot;/g, '"')
-                    .replace(/&quot;/g, '"')
-                    .replace(/&#39;/g, "'");
-
-                // Add paragraph break for significant time gaps
-                if (start - lastTimestamp > breakThreshold) {
-                    html += '<br>';
-                }
-
-                html += `
-                    <div class="caption-line" 
-                         data-start="${start}" 
-                         data-end="${start + duration}"
-                         onclick="seekTo(${start})">
-                        ${content}
-                    </div>`;
-
-                lastTimestamp = start;
-            }
-
-            document.getElementById('transcriptContainer').innerHTML = html;
-            setupScrollSync();
-        }
-
-        function seekTo(time) {
-            const iframe = document.querySelector('#videoContainer iframe');
-            if (iframe) {
-                iframe.contentWindow.postMessage(JSON.stringify({
-                    event: 'command',
-                    func: 'seekTo',
-                    args: [time]
-                }), '*');
-            }
-        }
-
-        function setupScrollSync() {
-            // Set up message listener for player events
-            window.addEventListener('message', (event) => {
-                if (event.origin !== "https://www.youtube.com") return;
-                
-                try {
-                    const data = JSON.parse(event.data);
-                    if (data.event === 'onStateChange' && data.info === 1) { // Playing
-                        updateActiveCaption();
-                    }
-                } catch (e) {
-                    // Ignore parsing errors
+            // Fetch captions using jQuery AJAX
+            $.ajax({
+                url: `https://video.google.com/timedtext?type=track&v=${videoId}&id=0&lang=en`,
+                dataType: "xml",
+                success: function(data) {
+                    getCaption(data, videoId, false);
+                },
+                error: function() {
+                    // Try server-side caption fetching
+                    serverGetCaption(videoId);
                 }
             });
         }
 
-        function updateActiveCaption() {
-            const iframe = document.querySelector('#videoContainer iframe');
-            if (!iframe) return;
-
-            // Get current time from player
-            iframe.contentWindow.postMessage(JSON.stringify({
-                event: 'listening',
-                func: 'getCurrentTime',
-                args: []
-            }), '*');
+        function serverGetCaption(videoId) {
+            $.ajax({
+                url: `/get-captions?videoId=${videoId}`,
+                dataType: "xml",
+                success: function(data) {
+                    getCaption(data, videoId, true);
+                },
+                error: function() {
+                    document.getElementById('demo').innerHTML = 
+                        'Could not load transcript. Try another video.';
+                }
+            });
         }
 
-        function showError(message) {
-            document.getElementById('transcriptContainer').innerHTML = `
-                <div class="error">${message}</div>`;
-        }
+        function getCaption(xml, videoId, fromServer) {
+            try {
+                const transcript = xml.getElementsByTagName('transcript')[0];
+                if (!transcript) throw new Error('No transcript found');
 
-        // Handle Enter key in URL input
-        document.getElementById('videoUrl').addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                loadVideo();
+                let last_t = 0.0;
+                const break_t = 5.0; // seconds
+
+                // Process each caption
+                for (let i = 0; i < transcript.childNodes.length; i++) {
+                    const text = transcript.childNodes[i];
+                    const start = parseFloat(text.getAttribute('start'));
+                    const duration = parseFloat(text.getAttribute('dur'));
+                    const content = text.textContent
+                        .replace(/&amp;#39;/g, "'")
+                        .replace(/&amp;quot;/g, '"');
+
+                    if (start > last_t + break_t) {
+                        HTML_captions += "<br/>";
+                    }
+
+                    HTML_captions += `
+                        <a href="javascript:;" class="youtube-marker" 
+                           data-start="${start}" 
+                           data-end="${start + duration}">
+                            ${content}
+                        </a><br/>`;
+                    
+                    last_t = start;
+                }
+
+                document.getElementById('demo').innerHTML = HTML_captions;
+                initializePlayer();
+                setupMarkers();
+
+            } catch (err) {
+                console.error('Error processing captions:', err);
+                if (!fromServer) {
+                    serverGetCaption(videoId);
+                } else {
+                    document.getElementById('demo').innerHTML = 
+                        'Failed to process captions. Try another video.';
+                }
             }
-        });
+        }
+
+        function setupMarkers() {
+            const elements = document.getElementsByClassName('youtube-marker');
+            Array.from(elements).forEach(el => {
+                el.onclick = function() {
+                    const start = parseFloat(this.getAttribute('data-start'));
+                    if (player && player.seekTo) {
+                        player.seekTo(start);
+                        player.playVideo();
+                    }
+                };
+            });
+        }
+
+        function onYouTubeIframeAPIReady() {
+            initializePlayer();
+        }
+
+        function initializePlayer() {
+            const playerElement = document.getElementById('player');
+            if (playerElement && !player) {
+                player = new YT.Player('player', {
+                    events: {
+                        'onStateChange': onPlayerStateChange
+                    }
+                });
+            }
+        }
+
+        function onPlayerStateChange(event) {
+            if (event.data == YT.PlayerState.PLAYING) {
+                setInterval(updateCurrentPosition, 100);
+            }
+        }
+
+        function updateCurrentPosition() {
+            if (!player || !player.getCurrentTime) return;
+            
+            const currentTime = player.getCurrentTime();
+            const markers = document.getElementsByClassName('youtube-marker');
+            let currentMarker = null;
+
+            Array.from(markers).forEach(marker => {
+                const start = parseFloat(marker.getAttribute('data-start'));
+                const end = parseFloat(marker.getAttribute('data-end'));
+
+                if (currentTime >= start && currentTime <= end) {
+                    marker.classList.add('youtube-marker-current');
+                    currentMarker = marker;
+                } else {
+                    marker.classList.remove('youtube-marker-current');
+                }
+            });
+
+            if (currentMarker && document.getElementById('autoscroll_check').checked) {
+                currentMarker.scrollIntoView({ 
+                    behavior: 'smooth', 
+                    block: 'center' 
+                });
+            }
+        }
     </script>
 </body>
 </html>
