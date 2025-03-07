@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>YouTube Transcript Viewer</title>
     <style>
+        /* Previous styles remain the same */
         body {
             font-family: Arial, sans-serif;
             margin: 0;
@@ -44,6 +45,10 @@
             cursor: pointer;
         }
 
+        .submit-button:hover {
+            background-color: #0056b3;
+        }
+
         .content-area {
             display: flex;
             gap: 20px;
@@ -54,6 +59,7 @@
             flex: 1;
             position: sticky;
             top: 20px;
+            height: fit-content;
         }
 
         .transcript-section {
@@ -73,24 +79,19 @@
             transition: background-color 0.2s;
         }
 
+        .youtube-marker:hover {
+            background-color: #e9ecef;
+        }
+
         .youtube-marker-current {
             background-color: #007bff;
             color: white;
         }
 
-        @media (max-width: 768px) {
-            .content-area {
-                flex-direction: column;
-            }
-            
-            .video-section {
-                position: static;
-            }
-            
-            .url-input {
-                width: 100%;
-                margin-bottom: 10px;
-            }
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #666;
         }
     </style>
 </head>
@@ -102,16 +103,27 @@
             <button onclick="processVideo()" class="submit-button">Get Transcript</button>
         </div>
         
+        <div id="errorMessage" class="error-message"></div>
+
         <div class="content-area">
             <div class="video-section" id="videoContainer"></div>
-            <div class="transcript-section" id="transcriptContainer">
-                Enter a YouTube URL to get started
+            <div class="transcript-section">
+                <div class="controls">
+                    <label>
+                        <input type="checkbox" id="autoScroll" checked> Auto-scroll
+                    </label>
+                    <button onclick="copyTranscript()" class="submit-button" style="float: right;">
+                        Copy Transcript
+                    </button>
+                </div>
+                <div id="transcriptContainer"></div>
             </div>
         </div>
     </div>
 
     <script>
         let player;
+        let updateInterval;
 
         // Load YouTube IFrame API
         const tag = document.createElement('script');
@@ -125,16 +137,40 @@
             return (match && match[7].length == 11) ? match[7] : false;
         }
 
+        function showError(message) {
+            const errorDiv = document.getElementById('errorMessage');
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+        }
+
+        function hideError() {
+            document.getElementById('errorMessage').style.display = 'none';
+        }
+
+        async function fetchWithTimeout(url, timeout = 5000) {
+            const controller = new AbortController();
+            const id = setTimeout(() => controller.abort(), timeout);
+            try {
+                const response = await fetch(url, { signal: controller.signal });
+                clearTimeout(id);
+                return response;
+            } catch (error) {
+                clearTimeout(id);
+                throw error;
+            }
+        }
+
         async function processVideo() {
+            hideError();
             const url = document.getElementById('videoUrl').value;
             const videoId = extractVideoId(url);
 
             if (!videoId) {
-                alert('Invalid YouTube URL');
+                showError('Invalid YouTube URL');
                 return;
             }
 
-            // Embed video
+            // Load video
             document.getElementById('videoContainer').innerHTML = `
                 <iframe 
                     id="player"
@@ -146,27 +182,57 @@
                     allowfullscreen>
                 </iframe>`;
 
-            // Fetch transcript from our backend
+            const transcriptContainer = document.getElementById('transcriptContainer');
+            transcriptContainer.innerHTML = '<div class="loading">Loading transcript...</div>';
+
             try {
-                const response = await fetch(`/get-transcript?videoId=${videoId}`);
-                if (!response.ok) throw new Error('Failed to fetch transcript');
+                // Try to get manual captions first
+                const manualResponse = await fetchWithTimeout(
+                    `https://video.google.com/timedtext?type=track&v=${videoId}&lang=en`
+                );
+                const manualText = await manualResponse.text();
                 
-                const data = await response.text();
+                // Try to get auto-generated captions if manual ones aren't available
+                const autoResponse = await fetchWithTimeout(
+                    `https://video.google.com/timedtext?type=track&v=${videoId}&lang=en&kind=asr`
+                );
+                const autoText = await autoResponse.text();
+
+                // Parse the responses
                 const parser = new DOMParser();
-                const xml = parser.parseFromString(data, "text/xml");
-                processCaptions(xml);
+                const manualXml = parser.parseFromString(manualText, "text/xml");
+                const autoXml = parser.parseFromString(autoText, "text/xml");
+
+                // Use manual captions if available, otherwise use auto-generated
+                if (manualXml.getElementsByTagName('transcript')[0]?.children.length > 0) {
+                    processCaptions(manualXml);
+                } else if (autoXml.getElementsByTagName('transcript')[0]?.children.length > 0) {
+                    processCaptions(autoXml);
+                } else {
+                    // Try another endpoint for auto-generated captions
+                    const finalResponse = await fetchWithTimeout(
+                        `https://video.google.com/timedtext?v=${videoId}&lang=en&kind=asr&fmt=srv3`
+                    );
+                    const finalText = await finalResponse.text();
+                    const finalXml = parser.parseFromString(finalText, "text/xml");
+                    
+                    if (finalXml.getElementsByTagName('transcript')[0]?.children.length > 0) {
+                        processCaptions(finalXml);
+                    } else {
+                        showError('No captions found for this video');
+                    }
+                }
             } catch (error) {
-                console.error('Error:', error);
-                document.getElementById('transcriptContainer').innerHTML = 
-                    'Could not load transcript. Please try another video.';
+                console.error('Error fetching captions:', error);
+                showError('Failed to load captions. They might not be available for this video.');
+                transcriptContainer.innerHTML = '';
             }
         }
 
         function processCaptions(xml) {
             const transcript = xml.getElementsByTagName('transcript')[0];
             if (!transcript || transcript.children.length === 0) {
-                document.getElementById('transcriptContainer').innerHTML = 
-                    'No captions found for this video';
+                showError('No captions found for this video');
                 return;
             }
 
@@ -225,9 +291,10 @@
         }
 
         function onPlayerStateChange(event) {
+            clearInterval(updateInterval);
+            
             if (event.data == YT.PlayerState.PLAYING) {
-                // Start updating current position
-                setInterval(updateCurrentPosition, 100);
+                updateInterval = setInterval(updateCurrentPosition, 100);
             }
         }
 
@@ -250,12 +317,23 @@
                 }
             }
 
-            if (currentMarker) {
+            if (currentMarker && document.getElementById('autoScroll').checked) {
                 currentMarker.scrollIntoView({ 
                     behavior: 'smooth', 
                     block: 'center' 
                 });
             }
+        }
+
+        function copyTranscript() {
+            const text = Array.from(document.getElementsByClassName('youtube-marker'))
+                .map(marker => marker.textContent.trim())
+                .join(' ');
+            
+            navigator.clipboard.writeText(text).then(
+                () => alert('Transcript copied to clipboard!'),
+                () => alert('Failed to copy transcript')
+            );
         }
 
         // Handle input with Enter key
